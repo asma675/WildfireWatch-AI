@@ -1,215 +1,287 @@
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { apiClient } from '@/api/client';
-import { Link } from 'react-router-dom';
-import { createPageUrl } from '@/utils';
-import { 
-  MapPin, 
-  AlertTriangle, 
-  Activity, 
-  TrendingUp,
-  ArrowRight,
-  Flame,
-  Loader2,
-  RefreshCw,
-  Zap
-} from 'lucide-react';
-import { Button } from "@/components/ui/button";
-import { toast } from 'sonner';
-import StatCard from '@/components/dashboard/StatCard';
-import ZoneCard from '@/components/dashboard/ZoneCard';
-import AlertItem from '@/components/dashboard/AlertItem';
-import RiskGauge from '@/components/dashboard/RiskGauge';
+import React, { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { Flame, AlertTriangle, TrendingUp, Plus, Map as MapIcon } from "lucide-react";
+import { zones as ZONES } from "../data/zones";
+
+function riskLevelToColor(level) {
+  if (level === "Extreme") return "text-red-400";
+  if (level === "High") return "text-orange-400";
+  if (level === "Moderate") return "text-amber-300";
+  return "text-green-400";
+}
+
+function riskLevelToRing(level) {
+  if (level === "Extreme") return "ring-red-500/30";
+  if (level === "High") return "ring-orange-500/30";
+  if (level === "Moderate") return "ring-amber-500/30";
+  return "ring-green-500/30";
+}
+
+function riskLevelToStroke(level) {
+  if (level === "Extreme") return "stroke-red-500";
+  if (level === "High") return "stroke-orange-500";
+  if (level === "Moderate") return "stroke-amber-500";
+  return "stroke-green-500";
+}
+
+function RiskRing({ value = 0, level = "Low" }) {
+  const radius = 28;
+  const circumference = 2 * Math.PI * radius;
+  const pct = Math.max(0, Math.min(100, value));
+  const dash = (pct / 100) * circumference;
+
+  return (
+    <svg width="76" height="76" viewBox="0 0 76 76" className="shrink-0">
+      <circle
+        cx="38"
+        cy="38"
+        r={radius}
+        fill="none"
+        stroke="rgba(255,255,255,0.08)"
+        strokeWidth="8"
+      />
+      <circle
+        cx="38"
+        cy="38"
+        r={radius}
+        fill="none"
+        strokeWidth="8"
+        className={riskLevelToStroke(level)}
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${circumference}`}
+        transform="rotate(-90 38 38)"
+      />
+      <text
+        x="38"
+        y="40"
+        textAnchor="middle"
+        className="fill-white font-semibold"
+        fontSize="16"
+      >
+        {pct}
+      </text>
+      <text
+        x="38"
+        y="56"
+        textAnchor="middle"
+        className="fill-slate-400 uppercase"
+        fontSize="9"
+      >
+        {level}
+      </text>
+    </svg>
+  );
+}
 
 export default function Dashboard() {
-  const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
+  const navigate = useNavigate();
 
-  const { data: zones = [], isLoading: zonesLoading, refetch: refetchZones } = useQuery({
-    queryKey: ['zones'],
-    queryFn: () => apiClient.entities.MonitoredZone.list('-risk_score', 50),
-  });
+  const stats = useMemo(() => {
+    const monitored = ZONES.length;
+    const extreme = ZONES.filter((z) => z.level === "Extreme").length;
+    const high = ZONES.filter((z) => z.level === "High").length;
+    const avg = monitored
+      ? Math.round(ZONES.reduce((a, z) => a + (z.risk || 0), 0) / monitored)
+      : 0;
 
-  const { data: alerts = [], isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
-    queryKey: ['alerts'],
-    queryFn: () => apiClient.entities.AlertHistory.list('-created_date', 10),
-  });
+    // “recent alerts” mock that looks like your screenshot
+    const recentAlerts = ZONES
+      .slice()
+      .sort((a, b) => (b.risk || 0) - (a.risk || 0))
+      .slice(0, 3)
+      .map((z, idx) => ({
+        id: `${z.id}-${idx}`,
+        title: z.name,
+        level: z.level,
+        score: z.risk,
+        time: "Dec 22, 5:22 PM",
+        notified: idx + 2,
+      }));
 
-  const handleRunAnalysis = async () => {
-    setIsRunningAnalysis(true);
-    toast.loading('Running zone analysis...');
-    try {
-      await apiClient.jobs.analyzeZones();
-      await refetchZones();
-      await refetchAlerts();
-      toast.dismiss();
-      toast.success('Analysis completed successfully');
-    } catch (error) {
-      toast.dismiss();
-      toast.error('Analysis failed: ' + error.message);
-    } finally {
-      setIsRunningAnalysis(false);
-    }
-  };
+    const highest = ZONES
+      .slice()
+      .sort((a, b) => (b.risk || 0) - (a.risk || 0))
+      .slice(0, 4);
 
-  const { data: alertConfigs = [] } = useQuery({
-    queryKey: ['alertConfigs'],
-    queryFn: () => apiClient.entities.AlertConfig.list(),
-  });
-
-  const isLoading = zonesLoading || alertsLoading;
-
-  // Calculate stats
-  const extremeZones = zones.filter(z => z.risk_level === 'extreme').length;
-  const highZones = zones.filter(z => z.risk_level === 'high').length;
-  const avgRisk = zones.length > 0 
-    ? zones.reduce((sum, z) => sum + (z.risk_score || 0), 0) / zones.length 
-    : 0;
-
-  const topRiskZones = zones
-    .filter(z => z.risk_score > 0)
-    .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
-    .slice(0, 4);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-      </div>
-    );
-  }
+    return { monitored, extreme, high, avg, recentAlerts, highest };
+  }, []);
 
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Threat Overview</h1>
-          <p className="text-slate-500 text-sm mt-1">Real-time wildfire risk monitoring • Automated analysis active</p>
+          <h1 className="text-3xl font-semibold tracking-tight">Threat Overview</h1>
+          <p className="text-sm text-slate-400">
+            Real-time wildfire risk monitoring • Automated analysis active
+          </p>
         </div>
+
         <div className="flex gap-3">
-          <Button
-            onClick={handleRunAnalysis}
-            disabled={isRunningAnalysis}
-            className="bg-amber-500 hover:bg-amber-600 text-black font-semibold"
+          <button
+            onClick={() => navigate("/RiskMap")}
+            className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-400 transition"
           >
-            {isRunningAnalysis ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analyzing...</>
-            ) : (
-              <><RefreshCw className="w-4 h-4 mr-2" /> Run Analysis</>
-            )}
-          </Button>
-          <Link to={createPageUrl('Zones')}>
-            <Button variant="outline" className="border-white/10">
-              <MapPin className="w-4 h-4 mr-2" />
-              Add Zone
-            </Button>
-          </Link>
+            <TrendingUp className="h-4 w-4" />
+            Run Analysis
+          </button>
+          <button
+            onClick={() => navigate("/Zones")}
+            className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10 transition ring-1 ring-white/10"
+          >
+            <Plus className="h-4 w-4" />
+            Add Zone
+          </button>
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Monitored Zones"
-          value={zones.length}
-          icon={MapPin}
-          variant="default"
-        />
-        <StatCard
-          title="Extreme Risk"
-          value={extremeZones}
-          subtitle="Zones requiring immediate attention"
-          icon={Flame}
-          variant="danger"
-        />
-        <StatCard
-          title="High Risk"
-          value={highZones}
-          icon={AlertTriangle}
-          variant="warning"
-        />
-        <StatCard
-          title="Avg Risk Score"
-          value={avgRisk.toFixed(0)}
-          icon={Activity}
-          variant={avgRisk > 60 ? "warning" : "success"}
-        />
+      {/* Top Stat Cards */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-400">Monitored Zones</p>
+            <MapIcon className="h-5 w-5 text-slate-300" />
+          </div>
+          <div className="mt-2 text-3xl font-semibold">{stats.monitored}</div>
+        </div>
+
+        <div className="rounded-2xl bg-red-500/10 p-5 ring-1 ring-red-500/20">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-300">Extreme Risk</p>
+            <Flame className="h-5 w-5 text-red-400" />
+          </div>
+          <div className="mt-2 text-3xl font-semibold">{stats.extreme}</div>
+          <p className="mt-1 text-xs text-slate-400">
+            Zones requiring immediate attention
+          </p>
+        </div>
+
+        <div className="rounded-2xl bg-orange-500/10 p-5 ring-1 ring-orange-500/20">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-300">High Risk</p>
+            <AlertTriangle className="h-5 w-5 text-orange-400" />
+          </div>
+          <div className="mt-2 text-3xl font-semibold">{stats.high}</div>
+        </div>
+
+        <div className="rounded-2xl bg-emerald-500/10 p-5 ring-1 ring-emerald-500/20">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-300">Avg Risk Score</p>
+            <TrendingUp className="h-5 w-5 text-emerald-400" />
+          </div>
+          <div className="mt-2 text-3xl font-semibold">{stats.avg}</div>
+        </div>
       </div>
 
-      {/* Main Content Grid */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* High Risk Zones */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">Highest Risk Zones</h2>
-            <Link to={createPageUrl('RiskMap')} className="text-sm text-amber-500 hover:text-amber-400 flex items-center gap-1">
-              View Map <ArrowRight className="w-4 h-4" />
-            </Link>
+      {/* Highest Risk + Recent Alerts */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Highest Risk Zones */}
+        <div className="lg:col-span-2">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Highest Risk Zones</h2>
+            <button
+              onClick={() => navigate("/RiskMap")}
+              className="text-sm font-semibold text-amber-400 hover:text-amber-300 transition"
+            >
+              View Map →
+            </button>
           </div>
-          
-          {topRiskZones.length > 0 ? (
-            <div className="grid sm:grid-cols-2 gap-4">
-              {topRiskZones.map((zone) => (
-                <Link key={zone.id} to={createPageUrl(`RiskMap?zone=${zone.id}`)}>
-                  <ZoneCard zone={zone} />
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-white/5 bg-slate-800/30 p-8 text-center">
-              <MapPin className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400">No zones have been analyzed yet</p>
-              <Link to={createPageUrl('Zones')}>
-                <Button className="mt-4 bg-amber-500 hover:bg-amber-600 text-black">
-                  Add Your First Zone
-                </Button>
-              </Link>
-            </div>
-          )}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {stats.highest.map((z) => (
+              <div
+                key={z.id}
+                className={`rounded-2xl bg-white/5 p-5 ring-1 ring-white/10 hover:ring-2 ${riskLevelToRing(
+                  z.level
+                )} transition cursor-pointer`}
+                onClick={() => navigate("/RiskMap")}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{z.name}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {z.lat.toFixed(4)}, {z.lng.toFixed(4)}
+                    </p>
+                    <p className={`mt-2 text-xs font-semibold ${riskLevelToColor(z.level)}`}>
+                      {z.level.toUpperCase()} RISK
+                    </p>
+                  </div>
+                  <RiskRing value={z.risk} level={z.level} />
+                </div>
+                <p className="mt-3 text-xs text-slate-400 line-clamp-2">
+                  {z.level === "Extreme"
+                    ? "Critical fire danger with low humidity and strong winds. Immediate monitoring recommended."
+                    : z.level === "High"
+                    ? "Elevated fire danger. Watch local advisories and avoid high-risk activity."
+                    : "Moderate seasonal risk. Stay prepared and monitor changes in conditions."}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Recent Alerts */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">Recent Alerts</h2>
-            <Link to={createPageUrl('Alerts')} className="text-sm text-amber-500 hover:text-amber-400 flex items-center gap-1">
-              View All <ArrowRight className="w-4 h-4" />
-            </Link>
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Recent Alerts</h2>
+            <button
+              onClick={() => navigate("/Alerts")}
+              className="text-sm font-semibold text-amber-400 hover:text-amber-300 transition"
+            >
+              View All →
+            </button>
           </div>
-          
-          {alerts.length > 0 ? (
-            <div className="space-y-3">
-              {alerts.slice(0, 5).map((alert) => (
-                <AlertItem key={alert.id} alert={alert} />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-white/5 bg-slate-800/30 p-6 text-center">
-              <AlertTriangle className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 text-sm">No alerts yet</p>
-            </div>
-          )}
+
+          <div className="space-y-4">
+            {stats.recentAlerts.map((a) => (
+              <div
+                key={a.id}
+                className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 hover:bg-white/10 transition cursor-pointer"
+                onClick={() => navigate("/RiskMap")}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{a.title}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Risk score: {a.score}
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${
+                      a.level === "Extreme"
+                        ? "bg-red-500/15 text-red-400 ring-1 ring-red-500/30"
+                        : a.level === "High"
+                        ? "bg-orange-500/15 text-orange-400 ring-1 ring-orange-500/30"
+                        : "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30"
+                    }`}
+                  >
+                    {a.level}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+                  <span>{a.time}</span>
+                  <span className="text-emerald-400 font-semibold">
+                    ✓ {a.notified} notified
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* System Status */}
-      <div className="rounded-2xl border border-white/5 bg-gradient-to-br from-slate-800/50 to-slate-900/50 p-6">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="p-3 rounded-xl bg-green-500/10">
-              <Activity className="w-6 h-6 text-green-400" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-white">Backend Functions Active</h3>
-              <p className="text-sm text-slate-500">
-                Auto-analysis • Alert dispatch • Air quality monitoring • Heat map generation
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-sm text-green-400 font-medium">All Systems Operational</span>
-          </div>
+      {/* Footer status strip (like your screenshot) */}
+      <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 flex items-center justify-between">
+        <div>
+          <p className="font-semibold">Backend Functions Active</p>
+          <p className="text-xs text-slate-400">
+            Auto-analysis • Alert dispatch • Air quality monitoring • Heat map generation
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
+          <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          All Systems Operational
         </div>
       </div>
     </div>
